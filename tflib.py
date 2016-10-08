@@ -56,7 +56,7 @@ class _TensorFlowLayer(object):
     def __init__(self, *args, **kwargs):
         pass
 
-    def instantiate(self, prev, W=None, b=None):
+    def instantiate(self, x, W, b, prev=None):
         raise ValueError('instantiate not implemented.')
 
 
@@ -72,8 +72,10 @@ class FullyConnectedLayer(_TensorFlowLayer):
             if self.nonlin: return self.nonlin(layer)
             return layer
         elif isinstance(prev, ConvolutionalLayer):
+            # TODO.
             pass
         elif isinstance(prev, MaxPoolingLayer):
+            # TODO.
             pass
 
 
@@ -89,8 +91,10 @@ class MaxPoolingLayer(_TensorFlowLayer):
             raise ValueError('Invalid architecture: A max-pooling layer cannot \
                              be the first layer.')
         if isinstance(prev, FullyConnectedLayer):
+            # TODO.
             pass
         elif isinstance(prev, ConvolutionalLayer):
+            # TODO.
             pass
         return tf.nn.max_pool(x, ksize=self.ksize, strides=self.strides, padding=self.padding)
 
@@ -103,7 +107,7 @@ class ConvolutionalLayer(_TensorFlowLayer):
         self.padding = padding
         self.nonlin = nonlin
 
-    def instantiate(self, x, W, b):
+    def instantiate(self, x, W, b, prev):
         x = tf.nn.conv2d(x, W, strides=self.strides, padding=self.padding)
         return self.nonlin(tf.nn.bias_add(x, b))
 
