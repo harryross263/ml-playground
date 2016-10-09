@@ -10,9 +10,9 @@ class _TensorFlowNeuralNetwork(object):
         self.architecture = kwargs.pop('architecture')
 
         self.x = tf.placeholder(tf.float32, [None,
-                                             self.architecture[0].dimension])
+                                             self.architecture[0].shape[1]])
         self.y_ = tf.placeholder(tf.float32, [None,
-                                              self.architecture[-1].dimension])
+                                              self.architecture[-1].shape[1]])
 
         self.weights, self.out = self._initialise_model()
 
@@ -44,8 +44,9 @@ class VanillaNeuralNetwork(_TensorFlowNeuralNetwork):
         layer = self.x
         for i, (in_, out_) in enumerate(zip(architecture[:-1], architecture[1:])):
             w, b = 'w' + str(i), 'b' + str(i)
-            weights[w] = tf.Variable(tf.random_normal([in_.dimension, out_.dimension]))
-            weights[b] = tf.Variable(tf.zeros([out_.dimension], dtype=tf.float32))
+            weights[w] = tf.Variable(tf.random_normal([in_.shape[1],
+                                                       out_.shape[1]]))
+            weights[b] = tf.Variable(tf.zeros([out_.shape[1]], dtype=tf.float32))
             layer = out_.instantiate(layer, weights[w], weights[b], in_)
 
         return weights, layer
@@ -62,21 +63,22 @@ class _TensorFlowLayer(object):
 
 class FullyConnectedLayer(_TensorFlowLayer):
     
-    def __init__(self, dimension=10, nonlin=tf.nn.relu):
-        self.dimension = dimension
+    def __init__(self, shape, nonlin=tf.nn.relu):
+        self.shape = shape
         self.nonlin = nonlin
 
     def instantiate(self, x, W, b, prev=None):
-        if not prev or isinstance(prev, FullyConnectedLayer):
-            layer = _linear(x, W, b)
-            if self.nonlin: return self.nonlin(layer)
-            return layer
+        if isinstance(prev, MaxPoolingLayer):
+            prev = tf.reshape(prev, [-1, self.shape[0]])
         elif isinstance(prev, ConvolutionalLayer):
-            # TODO.
-            pass
-        elif isinstance(prev, MaxPoolingLayer):
-            # TODO.
-            pass
+            # TODO: Reshape the output from the conv layer.
+            raise ValueError('FullyConnectedLayers cannot be placed directly \
+                             after a ConvolutionalLayer. A MaxPoolingLayer \
+                             must be inserted in between the two.')
+
+        layer = _linear(x, W, b)
+        if self.nonlin: return self.nonlin(layer)
+        return layer
 
 
 class MaxPoolingLayer(_TensorFlowLayer):
@@ -90,24 +92,27 @@ class MaxPoolingLayer(_TensorFlowLayer):
         if not prev:
             raise ValueError('Invalid architecture: A max-pooling layer cannot \
                              be the first layer.')
-        if isinstance(prev, FullyConnectedLayer):
-            # TODO.
-            pass
-        elif isinstance(prev, ConvolutionalLayer):
-            # TODO.
-            pass
         return tf.nn.max_pool(x, ksize=self.ksize, strides=self.strides, padding=self.padding)
 
 
 class ConvolutionalLayer(_TensorFlowLayer):
     
     def __init__(self, shape, strides=1, padding='SAME', nonlin=tf.nn.relu):
-        self.shape = shape
+        self.shape = shape # [width, heights, n_in, n_out]
         self.strides = [1, strides, strides, 1]
         self.padding = padding
         self.nonlin = nonlin
 
     def instantiate(self, x, W, b, prev):
+        if not prev or isinstance(prev, FullyConnectedLayer):
+            # TODO.
+            pass
+        elif isinstance(prev, ConvolutionalLayer):
+            # TODO.
+            pass
+        elif isinstance(prev, MaxPoolingLayer):
+            # TODO.
+            pass
         x = tf.nn.conv2d(x, W, strides=self.strides, padding=self.padding)
         return self.nonlin(tf.nn.bias_add(x, b))
 
