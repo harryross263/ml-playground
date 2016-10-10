@@ -44,9 +44,17 @@ class VanillaNeuralNetwork(_TensorFlowNeuralNetwork):
         layer = self.x
         for i, (in_, out_) in enumerate(zip(architecture[:-1], architecture[1:])):
             w, b = 'w' + str(i), 'b' + str(i)
-            weights[w] = tf.Variable(tf.random_normal([in_.shape[1],
-                                                       out_.shape[1]]))
-            weights[b] = tf.Variable(tf.zeros([out_.shape[1]], dtype=tf.float32))
+            if isinstance(out_, MaxPoolingLayer):
+                # Max pooling layers don't have weights.
+                weights[w] = None
+                weights[b] = None
+            elif isinstance(out_, FullyConnectedLayer):
+                weights[w] = tf.Variable(tf.random_normal(out_.shape))
+                weights[b] = tf.Variable(tf.zeros([out_.shape[1]], dtype=tf.float32))
+            elif isinstance(out_, ConvolutionalLayer):
+                weights[w] = tf.Variable(tf.truncated_normal(out_.shape, stddev=0.1))
+                weights[b] = tf.Variable(tf.constant(0.1, shape=[out_.shape[-1]]))
+
             layer = out_.instantiate(layer, weights[w], weights[b], in_)
 
         return weights, layer
@@ -68,17 +76,11 @@ class FullyConnectedLayer(_TensorFlowLayer):
         self.nonlin = nonlin
 
     def instantiate(self, x, W, b, prev=None):
-        if isinstance(prev, MaxPoolingLayer):
-            prev = tf.reshape(prev, [-1, self.shape[0]])
-        elif isinstance(prev, ConvolutionalLayer):
-            # TODO: Reshape the output from the conv layer.
-            raise ValueError('FullyConnectedLayers cannot be placed directly \
-                             after a ConvolutionalLayer. A MaxPoolingLayer \
-                             must be inserted in between the two.')
+        if isinstance(prev, FullyConnectedLayer) or isinstance(prev, MaxPoolingLayer):
+            x = tf.reshape(x, [-1, self.shape[0]])
 
-        layer = _linear(x, W, b)
-        if self.nonlin: return self.nonlin(layer)
-        return layer
+        if self.nonlin: return self.nonlin(_linear(x, W, b))
+        return _linear(x, W, b)
 
 
 class MaxPoolingLayer(_TensorFlowLayer):
@@ -89,102 +91,23 @@ class MaxPoolingLayer(_TensorFlowLayer):
         self.padding = padding
 
     def instantiate(self, x, W=None, b=None, prev=None):
-        if not prev:
-            raise ValueError('Invalid architecture: A max-pooling layer cannot \
-                             be the first layer.')
-        return tf.nn.max_pool(x, ksize=self.ksize, strides=self.strides, padding=self.padding)
+        return tf.nn.max_pool(x, ksize=self.ksize, strides=self.strides, 
+                              padding=self.padding)
 
 
 class ConvolutionalLayer(_TensorFlowLayer):
     
-    def __init__(self, shape, strides=1, padding='SAME', nonlin=tf.nn.relu):
-        self.shape = shape # [width, heights, n_in, n_out]
+    def __init__(self, shape, reshape, strides=1, padding='SAME', nonlin=tf.nn.relu):
+        self.shape = shape # [width, height, n_in, n_out]
+        self.reshape = reshape
         self.strides = [1, strides, strides, 1]
         self.padding = padding
         self.nonlin = nonlin
 
     def instantiate(self, x, W, b, prev):
-        if not prev or isinstance(prev, FullyConnectedLayer):
-            # TODO.
-            pass
-        elif isinstance(prev, ConvolutionalLayer):
-            # TODO.
-            pass
-        elif isinstance(prev, MaxPoolingLayer):
-            # TODO.
-            pass
+        x = tf.reshape(x, self.reshape)
         x = tf.nn.conv2d(x, W, strides=self.strides, padding=self.padding)
-        return self.nonlin(tf.nn.bias_add(x, b))
-
-    def weights(self):
-        return tf.Variable(tf.truncated_normal(self.shape, stddev=0.1))
-
-    def bias(self):
-        return tf.Variable(tf.constant(0.1, shape=self.shape[-1]))
-
-
-class ConvolutionalNeuralNetwork(_TensorFlowNeuralNetwork):
-
-    def __init__(self, *args, **kwargs):
-
-        self.nonlin = kwargs.pop('nonlin', tf.nn.relu)
-        self.learning_rate = kwargs.pop('learning_rate', 0.05)
-        self.optimizer = kwargs.pop('optimizer', tf.train.AdamOptimizer)
-
-        super(ConvolutionalNeuralNetwork, self).__init__(architecture)
-
-        cost = _cross_entropy(self.out, self.y_)
-        self.train_step = self.optimizer(self.learning_rate).minimize(cost)
-
-        self.accuracy = _accuracy(self.out, self.y_)
-
-        init = tf.initialize_all_variables()
-        self.sess = tf.Session()
-        self.sess.run(init)
-
-    def _initialise_weights(self):
-        architecture = self.architecture
-        weights = dict()
-        
-        for i, in_, out_ in enumerate(zip(architecture[:-1], architecture[1:])):
-            if isinstance(architecture[i], ConvolutionalLayer):
-                weights['w_conv' + str(i)] = architecture[i].weights()
-                weights['b_conv' + str(i)] = architecture[i].bias()
-            elif isinstance(architecture[i], MaxPoolingLayer):
-                # A max pooling layer doesn't have any weights.
-                pass
-            else:
-                # Fully connected.
-                weights['w' + str(i)] = tf.Variable(tf.random_normal(architecture[i]))
-                weights['b' + str(i)] = tf.Variable(tf.zeros([architecture[i][-1]],
-                                                             dtype=tf.float32))
-
-        return weights
-
-    def _generate_model(self):
-        architecture = self.architecture
-        nonlin = self.nonlin
-        
-        w, b = self.weights['w0'], self.weights['b0']
-        layer = nonlin(_linear(self.x, w, b))
-
-        for i in range(1, len(architecture) - 2):
-            if isinstance(architecture[i], ConvolutionalLayer):
-                w, b = self.weights['w_conv' + str(i)], self.weights['b_conv' + str(i)]
-                layer = architecture[i].instantiate(layer, w, b)
-            elif isinstance(architecture[i], MaxPoolingLayer):
-                layer = architecture[i].instantiate(layer)
-            else:
-                # Fully connected.
-                w, b = self.weights['w' + str(i)], self.weights['b' + str(i)]
-                layer = tf.reshape(layer, [-1, tf.shape(w)[0]])
-                layer = nonlin(_linear(layer, w, b))
-
-        depth = len(architecture) - 2
-        w, b = self.weights['w' + str(depth)], self.weights['b' + str(i)]
-        layer = tf.reshape(layer, [-1, tf.shape(w)[0]])
-        return _linear(layer, w, b)
-
+        return self.nonlin(x) + b
 
 def _cross_entropy(pred, targets):
     return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred, targets))
