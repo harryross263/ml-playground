@@ -8,11 +8,14 @@ class _TensorFlowNeuralNetwork(object):
     def __init__(self, *args, **kwargs):
 
         self.architecture = kwargs.pop('architecture')
+        self.dropout = kwargs.pop('dropout', False)
 
+        # TensorFlow placeholders.
         self.x = tf.placeholder(tf.float32, [None,
                                              self.architecture[0].shape[1]])
         self.y_ = tf.placeholder(tf.float32, [None,
                                               self.architecture[-1].shape[1]])
+        self.keep_prob = tf.placeholder(tf.float32)
 
         self.weights, self.out = self._initialise_model()
 
@@ -54,8 +57,11 @@ class VanillaNeuralNetwork(_TensorFlowNeuralNetwork):
             elif isinstance(out_, ConvolutionalLayer):
                 weights[w] = tf.Variable(tf.truncated_normal(out_.shape, stddev=0.1))
                 weights[b] = tf.Variable(tf.constant(0.1, shape=[out_.shape[-1]]))
+            else:
+                raise ValueError('Must be instance')
 
-            layer = out_.instantiate(layer, weights[w], weights[b], in_)
+            layer = out_.instantiate(layer, weights[w], weights[b], in_,
+                                     self.keep_prob)
 
         return weights, layer
 
@@ -65,7 +71,7 @@ class _TensorFlowLayer(object):
     def __init__(self, *args, **kwargs):
         pass
 
-    def instantiate(self, x, W, b, prev=None):
+    def instantiate(self, x, W, b, prev, keep_prob=1.0):
         raise ValueError('instantiate not implemented.')
 
 
@@ -75,12 +81,14 @@ class FullyConnectedLayer(_TensorFlowLayer):
         self.shape = shape
         self.nonlin = nonlin
 
-    def instantiate(self, x, W, b, prev=None):
+    def instantiate(self, x, W, b, prev, keep_prob=1.0):
         if isinstance(prev, FullyConnectedLayer) or isinstance(prev, MaxPoolingLayer):
             x = tf.reshape(x, [-1, self.shape[0]])
 
-        if self.nonlin: return self.nonlin(_linear(x, W, b))
-        return _linear(x, W, b)
+        layer = _linear(x, W, b)
+        if self.nonlin: layer = self.nonlin(layer)
+        layer = tf.nn.dropout(layer, keep_prob)
+        return layer
 
 
 class MaxPoolingLayer(_TensorFlowLayer):
@@ -90,9 +98,9 @@ class MaxPoolingLayer(_TensorFlowLayer):
         self.strides = [1, k, k, 1]
         self.padding = padding
 
-    def instantiate(self, x, W=None, b=None, prev=None):
-        return tf.nn.max_pool(x, ksize=self.ksize, strides=self.strides, 
-                              padding=self.padding)
+    def instantiate(self, x, W, b, prev, keep_prob=1.0):
+        layer = tf.nn.max_pool(x, ksize=self.ksize, strides=self.strides, padding=self.padding)
+        return tf.nn.dropout(layer, keep_prob)
 
 
 class ConvolutionalLayer(_TensorFlowLayer):
@@ -104,10 +112,12 @@ class ConvolutionalLayer(_TensorFlowLayer):
         self.padding = padding
         self.nonlin = nonlin
 
-    def instantiate(self, x, W, b, prev):
+    def instantiate(self, x, W, b, prev, keep_prob=1.0):
         x = tf.reshape(x, self.reshape)
         x = tf.nn.conv2d(x, W, strides=self.strides, padding=self.padding)
-        return self.nonlin(x) + b
+        layer = self.nonlin(x) + b
+        layer = tf.nn.dropout(layer, keep_prob)
+        return layer
 
 def _cross_entropy(pred, targets):
     return tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(pred, targets))
